@@ -1,4 +1,5 @@
 import csv
+from os.path import join
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 from sklearn import decomposition
@@ -7,50 +8,34 @@ from sklearn.linear_model import LinearRegression
 from itertools import combinations
 from statsmodels.tsa.stattools import adfuller
 from matplotlib import pyplot as plt
-from numpy import *
+import numpy as np
 import statistics
 
-#######################################################################################################################
-# Settings (MAKE EDITS HERE)
-#######################################################################################################################
+from config import ROOT
 
-# Location to store cleaned data
-clean_loc = 'PATH-TO-FILE'
-# Location to store returns data
-return_loc = 'PATH-TO-FILE'
-# List of companies we have sufficient data for
-companies = []
 
-#######################################################################################################################
+def get_cmap(n, name='hsv'):
+    '''Returns a function that maps each index in 0, 1, ..., n-1 to a distinct
+    RGB color; the keyword argument name must be a standard mpl colormap name.'''
+    return plt.cm.get_cmap(name, n)
+
 
 # Function sourced from https://stackoverflow.com/questions/57096574/how-to-apply-the-hurst-exponent-in-python-in-a-rolling-window
 def hurst(sp):
     # calculate standard deviation of differenced series using various lags
     lags = range(2, 20)
-    tau = [sqrt(std(subtract(sp[lag:], sp[:-lag]))) for lag in lags]
+    tau = [np.sqrt(np.std(np.subtract(sp[lag:], sp[:-lag]))) for lag in lags]
 
     # calculate Hurst as slope of log-log plot
-    m = polyfit(log(lags), log(tau), 1)
+    m = np.polyfit(np.log(lags), np.log(tau), 1)
     hurst = m[0] * 2.0
 
     return hurst
 
-# Create a dataframe using log return time series data
-df_data = {}
-for comp in companies:
-    # Open the companies csv file
-    file = open(return_loc + comp + "_return.csv")
-    value = list(csv.reader(file))
 
-    # Record the log returns of the closing values
-    close = []
-    for time in value[1:]:
-        close.append(time[-1])
-
-    df_data[comp] = close
-
-
-data = pd.DataFrame(df_data, columns=companies)
+# load test returns
+data = pd.read_csv(join(ROOT, 'data', 'rets.csv'), index_col=0)
+companies = data.columns
 
 # We must transpose the dataframe to ensure it works with sklearn
 data = data.transpose()
@@ -68,15 +53,30 @@ data_pca = pca.transform(data_scale)
 clust = OPTICS()
 clust.fit(data_pca)
 
+labels = clust.labels_
+num_labels = len(labels)
+
+fig, ax2 = plt.subplots()
+cmap = get_cmap(num_labels)
+colors = [cmap(i) for i in range(num_labels)]
+
+for klass, color in zip(range(0, num_labels), colors):
+    Xk = data_pca[clust.labels_ == klass]
+    ax2.plot(Xk[:, 0], Xk[:, 1], color, alpha=0.3)
+ax2.plot(data_pca[clust.labels_ == -1, 0], data_pca[clust.labels_ == -1, 1], "k+", alpha=0.1)
+ax2.set_title("Automatic Clustering\nOPTICS")
+plt.show()
+
+
 # Sort the results of the optics algorithm into a dictionary
 # Notice that stocks assigned equal positive numbers are considered clustered together (-1 means no clustering)
 results = {}
 i = 0
-for i in range(0, len(clust.labels_)):
-    if clust.labels_[i] not in results.keys():
-        results[clust.labels_[i]] = [companies[i]]
+for i in range(0, num_labels):
+    if labels[i] not in results.keys():
+        results[labels[i]] = [companies[i]]
     else:
-        results[clust.labels_[i]].append(companies[i])
+        results[labels[i]].append(companies[i])
 
 # Make a list of the pairs we plan to test and which companies data is needed
 pairs = []
@@ -113,7 +113,7 @@ for pair in pairs:
 
     # Make sure that the regression coefficient is as large as possible
     info = []
-    if reg1.coef_[0][0] > reg1.coef_[0][0]:
+    if reg1.coef_[0][0] > reg2.coef_[0][0]:
         info.append(pair[0])
         info.append(pair[1])
         info.append(float(reg1.coef_[0][0]))
@@ -158,7 +158,7 @@ for pair in pair_hurst:
     p_value = adfuller(spread)[1]
 
     # If pair satisfies p-value then it moves to the next step
-    if p_value <= 0.05/len(pair_spread):
+    if p_value <= 0.05 / len(pair_spread):
         pair_coint.append((pair[0], pair[1], spread))
 
 print("Number of pairs to test " + str(len(pair_spread)))
