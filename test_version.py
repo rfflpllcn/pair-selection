@@ -3,7 +3,7 @@ from os.path import join
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 from sklearn import decomposition
-from sklearn.cluster import OPTICS
+from sklearn.cluster import OPTICS, DBSCAN
 from sklearn.linear_model import LinearRegression
 from itertools import combinations
 from statsmodels.tsa.stattools import adfuller
@@ -12,6 +12,7 @@ import numpy as np
 import statistics
 
 from config import ROOT
+from yahoo import PriceDownloader
 
 
 def get_cmap(n, name='hsv'):
@@ -33,27 +34,34 @@ def hurst(sp):
     return hurst
 
 
-# load test returns
-data = pd.read_csv(join(ROOT, 'data', 'rets.csv'), index_col=0)
-companies = data.columns
+# load prices
+downloader = PriceDownloader("sp500", start_date='2021-01-01', end_date='2022-01-01', interval='1d')
+price_data = downloader.load(load_if_exists=True, exclude_tickers=['BRK.B', 'CEG', 'BF.B'])
+rets = price_data.pct_change()
 
-# We must transpose the dataframe to ensure it works with sklearn
-data = data.transpose()
+rets.dropna(axis=0, how='all', inplace=True)  # drop first row (NA)
+rets.dropna(axis=1, how='any', inplace=True)
+
+companies = price_data.columns
+
+# We must transpose the rets to ensure it works with sklearn
+rets = rets.transpose()
 
 # Because pca can be affected by the scale of the data we must use StandardScaler
 scaler = StandardScaler()
-data_scale = scaler.fit_transform(data)
+rets_scale = scaler.fit_transform(rets)
 
 # Run the pca algorithm on the scaled data
 pca = decomposition.PCA(n_components=2)
-pca.fit(data_scale)
-data_pca = pca.transform(data_scale)
+pca.fit(rets_scale)
+data_pca = pca.transform(rets_scale)
 
 # Run the optics algorithm to determine the which stocks are clustered together
+
 clust = OPTICS()
 clust.fit(data_pca)
 
-labels = clust.labels_
+labels = list(set(clust.labels_))
 num_labels = len(labels)
 
 fig, ax2 = plt.subplots()
@@ -72,11 +80,11 @@ plt.show()
 # Notice that stocks assigned equal positive numbers are considered clustered together (-1 means no clustering)
 results = {}
 i = 0
-for i in range(0, num_labels):
-    if labels[i] not in results.keys():
-        results[labels[i]] = [companies[i]]
+for i in range(0, len(clust.labels_)):
+    if clust.labels_[i] not in results.keys():
+        results[clust.labels_[i]] = [companies[i]]
     else:
-        results[labels[i]].append(companies[i])
+        results[clust.labels_[i]].append(companies[i])
 
 # Make a list of the pairs we plan to test and which companies data is needed
 pairs = []
@@ -87,27 +95,30 @@ for key in results.keys():
         pairs = pairs + list(comb)
         company = company + results[key]
 
-# Download all the necessary data
-price_data = {}
-for comp in company:
-    # Open the companies csv file
-    file = open(clean_loc + comp + "_clean.csv")
-    value = list(csv.reader(file))
-
-    # Record the log prices of the closing values
-    close = []
-    for time in value[1:]:
-        close.append([float(time[-1])])
-
-    price_data[comp] = close
+# # Download all the necessary data
+# price_data = {}
+# for comp in company:
+#     # Open the companies csv file
+#     file = open(clean_loc + comp + "_clean.csv")
+#     value = list(csv.reader(file))
+#
+#     # Record the log prices of the closing values
+#     close = []
+#     for time in value[1:]:
+#         close.append([float(time[-1])])
+#
+#     price_data[comp] = close
 
 # Calculate the spread for every pair
+price_data = price_data.to_dict(orient='list')
 pair_spread = []
 for pair in pairs:
     # Regression of 0 = logy - nlogx or logy = nlogx
     s1 = price_data[pair[0]]
     s2 = price_data[pair[1]]
 
+    s1 = [[_] for _ in s1]
+    s2 = [[_] for _ in s2]
     reg1 = LinearRegression().fit(s2, s1)
     reg2 = LinearRegression().fit(s1, s2)
 
@@ -126,7 +137,8 @@ for pair in pairs:
     spread = []
     for i in range(0, len(s1)):
         # logy - nlogx
-        spread.append(price_data[info[0]][i][0] - info[2] * price_data[info[1]][i][0])
+        # spread.append(price_data[info[0]][i][0] - info[2] * price_data[info[1]][i][0])
+        spread.append(price_data[info[0]][i] - info[2] * price_data[info[1]][i])
 
     info.append(spread)
 
@@ -139,7 +151,7 @@ pair_hurst = []
 pair_plot = []
 for pair in pair_spread:
     # Prepare the spread data
-    spread = pair[3][1608:]
+    spread = pair[3]
 
     # Calculate the hurst exponent
     H = hurst(spread)
@@ -152,7 +164,7 @@ for pair in pair_spread:
 pair_coint = []
 for pair in pair_hurst:
     # Prepare the spread data
-    spread = pair[3][1608:]
+    spread = pair[3]
 
     # Check for cointegration at 5%
     p_value = adfuller(spread)[1]

@@ -55,6 +55,7 @@ class PriceDownloader:
     def __init__(self, market, start_date=None, end_date=None, interval=None):
         """
 
+        :param market:
         :param start_date:
         :param end_date:
         :param interval (str): Valid intervals: 1m,2m,5m,15m,30m,60m,90m,1h,1d,5d,1wk,1mo,3mo
@@ -80,7 +81,9 @@ class PriceDownloader:
             self.assets = sp_assets.Symbol.tolist()
             fname = 'sp_components_data'
         else:
-            raise NotImplementedError("market {} not supported".format(value))
+            self.assets = [value] if isinstance(value, str) else value
+            fname = 'sp_index_data'
+            # raise NotImplementedError("market {} not supported".format(value))
 
         self.fpath = join(ROOT, 'data', '{}.pkl'.format(fname))
 
@@ -106,20 +109,36 @@ class PriceDownloader:
             print('Failed download, try again.')
             data = None
 
-    def load(self, level='Adj Close'):
-        if not exists(self.fpath):
+    def load(self, level='Adj Close', load_if_exists=True, exclude_tickers=None, exclude_tickers_with_nans=False):
+        if (not exists(self.fpath)) or (not load_if_exists):
             self.download()
 
         file = open(self.fpath, 'rb')
         prices = pickle.load(file)
 
-        out = prices.iloc[:, prices.columns.get_level_values(1) == level]
-        out.columns = out.columns.get_level_values(0)
+        # if isinstance(prices.columns, pd.MultiIndex):
+        if len(self.assets) > 1:
+            out = prices.iloc[:, prices.columns.get_level_values(1) == level]
+            out.columns = out.columns.get_level_values(0)
+        else:
+            out = prices[level].to_frame()
+            out.columns = self.assets
+
+        if exclude_tickers is not None:
+            exclude_tickers = [exclude_tickers] if isinstance(exclude_tickers, str) else exclude_tickers
+            out = out[[_c for _c in out.columns if _c not in exclude_tickers]]
+
+        if exclude_tickers_with_nans:
+            out = out[out.isnull().any(axis=1).T == False]
         return out
 
 
 if __name__ == '__main__':
+    from yfinance.shared import _ERRORS
+
     downloader = PriceDownloader("sp500", start_date='2021-01-01', end_date='2022-01-01', interval='1d')
-    prices = downloader.load()
+    prices = downloader.load(load_if_exists=True, exclude_tickers=['BRK.B', 'CEG', 'BF.B'])
+
+    print("ERROR", _ERRORS)
 
     print()
